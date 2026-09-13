@@ -59,6 +59,7 @@ Get an API key from your [snapnedit dashboard](https://snapnedit.com/dashboard).
 | `wait_for_job(job_id, poll_interval:, timeout:)` | Polls until the job is terminal *and* its delivery has settled. |
 | `download_result(job)` | Fetches the result bytes from the signed url. |
 | `list_operations` | `GET /operations` — the catalog, including each operation's params JSON Schema. Public. |
+| `usage(from:, to:, group_by:, …)` | `GET /usage` — jobs, credits and embed sessions over a range, bucketed. Returns a `UsageReport`. |
 | `destinations` | Saved storage destinations: `list`, `create`, `update`, `delete`, `test`, `presign_upload`. |
 | `embed` | `create_session` (publishable key → token) and `create_token` (secret key → scoped token). |
 | `designs` | `create` (compile a design spec) and `render` (server-side render to bytes/PDF). |
@@ -220,6 +221,78 @@ them as secrets in motion.
 
 ---
 
+## What a job cost
+
+Every job — from `create_job`, `get_job`, `wait_for_job`, and delegated on
+`RunResult` — reports its own attribution, the same three facts `GET /usage`
+aggregates:
+
+| | |
+| --- | --- |
+| `job.credit_cost` | Credits actually debited. 0 for a free operation, a cache hit, a delivery-only clone, or an unmetered website job. Debited at creation, refunded in full if the job ends `failed`. |
+| `job.cached?` | The result came out of the cache: no model ran, nothing was billed. `job.cache_hit?` reads this flag (falling back to the `200`-not-`202` status for a job you polled rather than created). |
+| `job.delivery_only?` | The row exists only to deliver an already-cached result to your bucket — cached, free, and still worth polling for `delivery`. |
+
+```ruby
+job = client.create_job(Snapnedit::Operations::UPSCALE, asset.asset_id)
+job.credit_cost   # => 2
+job.cached?       # => false
+
+again = client.create_job(Snapnedit::Operations::UPSCALE, asset.asset_id)
+again.cached?     # => true — a new job id, the same result, billed 0
+again.credit_cost # => 0
+```
+
+---
+
+## Usage and credits
+
+`client.usage` is `GET /usage`: what the account ran, what it cost and where it
+came from, bucketed along **one** dimension at a time. No arguments means the
+last 30 days grouped by day.
+
+```ruby
+report = client.usage(group_by: "operation", from: Date.today - 7)
+
+report.from                      # => "2026-09-06T00:00:00.000Z" (an instant, not a day)
+report.totals.jobs               # => 128  — REQUESTS, cache hits included
+report.totals.credits            # => 214  — what was actually debited
+report.totals.cache_hits         # => 31   — served from cache, billed nothing
+report.totals.active_sessions    # => 4    — embed sessions seen in the range
+
+report.series.first.key          # => "upscale"
+report.bucket("upscale").credits # => 96
+```
+
+| Argument | |
+| --- | --- |
+| `from:` / `to:` | A `Time`, a `Date`, or an ISO-8601 `String`. A bare `"2026-09-01"` is that whole UTC day. Defaults to the last 30 days; a range over 366 days is `invalid_input`. |
+| `group_by:` | One of `Snapnedit::Usage::GROUP_BY` — `day` (zero-filled, oldest first), `key`, `origin`, `operation`, `source`. Everything but `day` is ordered busiest first. |
+| `key_id:` / `origin:` / `operation:` / `source:` | Filters. `source:` is one of `Snapnedit::Usage::SOURCES` (`api`, `embed`, `session`, `anonymous`). |
+
+`report.keys` is the cap gauge — every live api key on the account with what it
+has spent **today**, whatever range you asked for:
+
+```ruby
+report.keys.each do |key|
+  next unless key.capped?
+  warn "#{key.name}: #{key.used_today}/#{key.daily_credit_limit} today" if key.remaining_today < 10
+end
+```
+
+Two things to know before writing an assertion against it:
+
+* **A cache hit still creates a job.** One row per *request*, so `totals.jobs`
+  counts what you asked for and `totals.cache_hits` says how many of those ran
+  no model. `POST /jobs` on a hit therefore answers a **new** job id with the
+  **same** `output_asset_id` as the job whose result it reuses — and the job
+  itself says so: `job.cached? == true`, `job.credit_cost == 0`.
+* **An embed token sees only its own key.** `key_id:` is forced to it and
+  `report.keys` comes back empty — a page-scoped credential must not become an
+  account-wide reporting one.
+
+---
+
 ## Errors
 
 Every failure raises `Snapnedit::Error`, which carries a machine-readable
@@ -269,7 +342,8 @@ so it carries no code or status.
 ## Operations
 
 `Snapnedit::Operations::ALL` — 17 ids. Credits are charged at job-creation
-time; an identical resubmission is a **free cache hit** (`Job#cache_hit?`).
+time; an identical resubmission is a **free cache hit** (`Job#cached?`) — a new
+job id, the same `output_asset_id`, and `credit_cost == 0`.
 
 | Constant | Id | Credits | Mask |
 | --- | --- | --- | --- |
@@ -322,7 +396,7 @@ bundle install
 
 bundle exec rubocop
 bundle exec rspec                    # unit specs — no network, injected HTTP adapter
-bundle exec rspec --tag conformance  # the 24-scenario SDK conformance suite
+bundle exec rspec --tag conformance  # the 25-scenario SDK conformance suite
 gem build snapnedit.gemspec
 ```
 

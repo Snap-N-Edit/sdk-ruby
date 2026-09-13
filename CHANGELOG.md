@@ -6,6 +6,36 @@ gem adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-13
+
+### Added
+
+- `Client#usage` — `GET /usage`: jobs, credits, cache hits, deliveries and
+  embed sessions over a date range, bucketed along one dimension
+  (`group_by:` `day` / `key` / `origin` / `operation` / `source`) and
+  filterable by `key_id:`, `origin:`, `operation:` and `source:`. `from:` /
+  `to:` accept a `Time`, a `Date` or an ISO-8601 `String` (a bare
+  `"YYYY-MM-DD"` means that whole UTC day).
+- `UsageReport`, `UsageTotals`, `UsageSeriesEntry`, `UsageKey` and
+  `UsageFacts`, plus `Snapnedit::Usage::{GROUP_BY, SOURCES, UNATTRIBUTED}`.
+  `UsageReport#bucket("upscale")` looks one series entry up by key;
+  `UsageKey#remaining_today` gauges a publishable key against its daily cap.
+- The `usage.query` conformance scenario. The suite now implements all **25**
+  scenarios of `test/conformance/scenarios.json`.
+
+- `Job#credit_cost`, `Job#cached?` and `Job#delivery_only?` — the per-job usage
+  attribution `POST /jobs` and `GET /jobs/{id}` now echo, with
+  `RunResult#credit_cost` / `RunResult#cached?` delegating to the final job. A
+  body without them (an older deployment) reads as unbilled and uncached.
+
+### Changed
+
+- A cache hit creates a NEW job row: `POST /jobs` answers `200` with a new
+  `jobId`, the SAME `outputAssetId` as the job whose result it reuses, and
+  `cached: true` / `creditCost: 0` — so usage can count requests separately
+  from model runs. `Job#cache_hit?` now reads that `cached` flag and only falls
+  back to the `200` status, which makes it true for a polled job too.
+
 ## [0.1.0] - 2026-09-13
 
 First release. Ruby >= 3.2, standard library only, no runtime dependencies.
@@ -38,5 +68,6 @@ First release. Ruby >= 3.2, standard library only, no runtime dependencies.
 - Full SDK conformance suite: all 24 scenarios of the monorepo's
   `test/conformance/scenarios.json`.
 
-[Unreleased]: https://github.com/Snap-N-Edit/sdk-ruby/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Snap-N-Edit/sdk-ruby/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Snap-N-Edit/sdk-ruby/releases/tag/v0.1.1
 [0.1.0]: https://github.com/Snap-N-Edit/sdk-ruby/releases/tag/v0.1.0

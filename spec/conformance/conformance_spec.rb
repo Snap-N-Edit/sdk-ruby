@@ -2,7 +2,7 @@
 
 require_relative "conformance_helper"
 
-# THE 24 SCENARIOS OF `test/conformance/scenarios.json`, one `describe` per id.
+# THE 25 SCENARIOS OF `test/conformance/scenarios.json`, one `describe` per id.
 #
 # The server is the real Fastify api and the real worker, over a real socket —
 # see docs/sdk-conformance.md. Run with:
@@ -17,6 +17,50 @@ RSpec.describe "snapnedit SDK conformance", :conformance,
   def self.scenario(id, &block)
     Conformance::IMPLEMENTED << id
     describe(id, &block)
+  end
+
+  # The two jobs `usage.query` reports on: one PAID (upscale, 2 credits) and
+  # one FREE (resize-image, 0), each from bytes nobody has submitted before so
+  # neither can be a free cache hit.
+  def seed_usage_jobs
+    [[Snapnedit::Operations::UPSCALE, {}], [Snapnedit::Operations::RESIZE_IMAGE, { width: 4 }]].each do |op, params|
+      job = Conformance.api.create_job(op, Conformance.unique_upload("usage-#{op}").asset_id, params: params)
+      Conformance.api.wait_for_job(job.id, poll_interval: 0.05)
+    end
+  end
+
+  # `usage.query` asserts the same shape over three different objects; these
+  # keep the scenario itself readable (and each `scenario` block is one RSpec
+  # example group, which the length cops measure as a single example).
+  def expect_counters(facts, fields)
+    fields.each do |field|
+      value = facts.public_send(field)
+      expect(value).to be_a(Integer), "#{field} is #{value.inspect}"
+      expect(value).to be >= 0
+    end
+  end
+
+  # Every scenario shares one seeded account and they run in any order, so the
+  # totals are asserted as LOWER BOUNDS — never as equalities.
+  def expect_usage_totals(totals)
+    expect(totals.jobs).to be >= 2
+    expect(totals.credits).to be >= 2
+    expect(totals.free).to be >= 1
+    expect_counters(totals, %i[cache_hits failed delivered delivery_failed sessions active_sessions])
+  end
+
+  def expect_usage_entry(entry)
+    expect(entry.key).to be_a(String)
+    expect(entry.label).to be_a(String)
+    expect_counters(entry, %i[jobs credits cache_hits free failed delivered delivery_failed sessions])
+  end
+
+  def expect_usage_key(key)
+    expect(key.id).to be_a(String)
+    expect(key.name).to be_a(String)
+    expect(key.kind).to eq("secret").or eq("publishable")
+    expect(key.daily_credit_limit).to be_nil.or(be_a(Integer))
+    expect(key.used_today).to be >= 0
   end
 
   before(:all) { Conformance.start!(RSpec.configuration.monorepo_root) }
@@ -192,7 +236,12 @@ RSpec.describe "snapnedit SDK conformance", :conformance,
 
       job = api.create_job(Snapnedit::Operations::RESIZE_IMAGE, asset.asset_id, params: { width: 4 })
       expect(job.http_status).to eq(202)
-      expect(api.wait_for_job(job.id, poll_interval: 0.05).state).to eq("succeeded")
+      # The job says so itself, not just the ledger.
+      expect(job.credit_cost).to eq(0)
+      expect(job.cached?).to be(false)
+      done = api.wait_for_job(job.id, poll_interval: 0.05)
+      expect(done.state).to eq("succeeded")
+      expect(done.credit_cost).to eq(0)
 
       expect(Conformance.balance).to eq(before_balance)
       expect(Snapnedit::Operations.credit_cost("resize-image")).to eq(0)
@@ -206,6 +255,7 @@ RSpec.describe "snapnedit SDK conformance", :conformance,
 
       job = api.create_job(Snapnedit::Operations::REMOVE_BACKGROUND, asset.asset_id)
       expect(job.http_status).to eq(202)
+      expect(job.credit_cost).to eq(1)
       # The debit lands before the worker ever sees the job.
       expect(Conformance.balance).to eq(before_balance - 1)
 
@@ -226,7 +276,13 @@ RSpec.describe "snapnedit SDK conformance", :conformance,
 
       expect(second.http_status).to eq(200)
       expect(second).to be_cache_hit
+      expect(second.cached?).to be(true)
+      expect(second.credit_cost).to eq(0)
+      expect(first.cached?).to be(false)
       expect(second.state).to eq("succeeded")
+      # A hit still records a job — one row per REQUEST, so usage can tell what
+      # was asked for from what ran a model. A NEW id, the SAME result.
+      expect(second.id).not_to eq(first.id)
       expect(second.output_asset_id).to eq(done.output_asset_id)
       expect(Conformance.balance).to eq(before_balance)
     end
@@ -509,6 +565,60 @@ RSpec.describe "snapnedit SDK conformance", :conformance,
       expect(missing["error"]["code"]).to eq(foreign["error"]["code"])
       expect(missing["error"]["message"].sub("00000000-0000-4000-8000-000000000000", "ID"))
         .to eq(foreign["error"]["message"].sub(job.id, "ID"))
+    end
+  end
+
+  # --------------------------------------------------------------- usage ---
+
+  scenario "usage.query" do
+    # One paid job and one free one, so the numbers below are traffic this
+    # scenario actually produced.
+    before(:all) { seed_usage_jobs }
+
+    it "reports the resolved range and the account-wide totals" do
+      report = api.usage(group_by: "operation")
+
+      expect(Time.parse(report.from)).to be <= Time.parse(report.to)
+      expect(report.group_by).to eq("operation")
+      expect_usage_totals(report.totals)
+    end
+
+    it "buckets the series by operation, with the credits each one cost" do
+      report = api.usage(group_by: "operation")
+      upscale = report.bucket("upscale")
+
+      expect(report.bucket("resize-image").credits).to eq(0)
+      # A bucket's credits is jobs x cost, so with N upscales the honest
+      # assertion is "a multiple of 2, at least 2".
+      expect(upscale.credits).to be >= 2
+      expect(upscale.credits % 2).to eq(0)
+      report.series.each { |entry| expect_usage_entry(entry) }
+    end
+
+    it "lists the account's live api keys with today's spend against their cap" do
+      keys = api.usage(group_by: "key").keys
+
+      expect(keys.size).to be >= 2
+      keys.each { |key| expect_usage_key(key) }
+    end
+
+    it "zero-fills a day series across the whole range, today included" do
+      report = api.usage(group_by: :day)
+
+      expect(report.group_by).to eq("day")
+      expect(report.series.map(&:key)).to include(Time.now.utc.strftime("%Y-%m-%d"))
+    end
+
+    it "refuses a caller with no credential, and a backwards range" do
+      expect { anon.usage }.to raise_error(Snapnedit::Error) { |e|
+        expect(e.status).to eq(401)
+        expect(e.code).to eq(Snapnedit::ErrorCodes::UNAUTHORIZED)
+      }
+
+      expect { api.usage(from: "2026-09-13", to: "2026-09-01") }.to raise_error(Snapnedit::Error) { |e|
+        expect(e.status).to eq(400)
+        expect(e.code).to eq(Snapnedit::ErrorCodes::INVALID_INPUT)
+      }
     end
   end
 

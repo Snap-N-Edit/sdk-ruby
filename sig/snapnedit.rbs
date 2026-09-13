@@ -9,6 +9,7 @@ module Snapnedit
   type bytes_source = String | IO | StringIO
   type job_input = String | Upload | Hash[Symbol | String, String]
   type destination_arg = Symbol | nil | Hash[Symbol | String, untyped] | Destination | String
+  type time_arg = Time | Date | String | nil
 
   module ErrorCodes
     INVALID_INPUT: String
@@ -174,6 +175,9 @@ module Snapnedit
     def download: () -> SignedUrl?
     def error_code: () -> String?
     def message: () -> String?
+    def credit_cost: () -> Integer
+    def cached?: () -> bool
+    def delivery_only?: () -> bool
     def input_kind: () -> String
     def destination: () -> DestinationSummary?
     def delivery: () -> Delivery?
@@ -191,7 +195,58 @@ module Snapnedit
     def input_kind: () -> String
     def destination: () -> DestinationSummary?
     def delivery: () -> Delivery?
+    def credit_cost: () -> Integer
+    def cached?: () -> bool
     def write: (String path) -> Integer
+  end
+
+  module Usage
+    GROUP_BY: Array[String]
+    SOURCES: Array[String]
+    UNATTRIBUTED: String
+  end
+
+  class UsageFacts < Model
+    def jobs: () -> Integer
+    def credits: () -> Integer
+    def cache_hits: () -> Integer
+    def free: () -> Integer
+    def failed: () -> Integer
+    def delivered: () -> Integer
+    def delivery_failed: () -> Integer
+  end
+
+  class UsageTotals < UsageFacts
+    def sessions: () -> Integer
+    def active_sessions: () -> Integer
+  end
+
+  class UsageSeriesEntry < UsageFacts
+    def key: () -> String
+    def label: () -> String
+    def sessions: () -> Integer
+  end
+
+  class UsageKey < Model
+    def id: () -> String
+    def name: () -> String
+    def kind: () -> String
+    def secret?: () -> bool
+    def publishable?: () -> bool
+    def daily_credit_limit: () -> Integer?
+    def capped?: () -> bool
+    def used_today: () -> Integer
+    def remaining_today: () -> Integer?
+  end
+
+  class UsageReport < Model
+    def from: () -> String
+    def to: () -> String
+    def group_by: () -> String
+    def totals: () -> UsageTotals
+    def series: () -> Array[UsageSeriesEntry]
+    def keys: () -> Array[UsageKey]
+    def bucket: (String key) -> UsageSeriesEntry?
   end
 
   class Destination < Model
@@ -306,6 +361,10 @@ module Snapnedit
     def get_job: (String job_id) -> Job
     def wait_for_job: (String job_id, ?poll_interval: Numeric, ?timeout: Numeric) -> Job
     def download_result: (Job | SignedUrl | String job_or_signed_url) -> String
+    def usage: (
+      ?from: time_arg, ?to: time_arg, ?group_by: (String | Symbol)?, ?key_id: String?,
+      ?origin: String?, ?operation: String?, ?source: (String | Symbol)?
+    ) -> UsageReport
     def run: (
       String operation, bytes_source | Hash[Symbol | String, String] input,
       ?params: Hash[untyped, untyped], ?mask: bytes_source?, ?mime: String?,

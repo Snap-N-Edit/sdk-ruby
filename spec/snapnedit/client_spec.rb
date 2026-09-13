@@ -25,7 +25,8 @@ RSpec.describe Snapnedit::Client do
     {
       "state" => "succeeded", "outputAssetId" => "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
       "download" => { "url" => "/_local/results/abc.png?sig=y", "expiresAt" => "2026-09-13T01:00:00.000Z" },
-      "input" => { "kind" => "asset" }, "destination" => nil, "delivery" => nil
+      "input" => { "kind" => "asset" }, "destination" => nil, "delivery" => nil,
+      "creditCost" => 2, "cached" => false, "deliveryOnly" => false
     }.merge(overrides)
   end
 
@@ -114,7 +115,8 @@ RSpec.describe Snapnedit::Client do
     before do
       http.stub(:post, "/jobs", status: 202,
                                 json: { jobId: job_id, status: { state: "queued" },
-                                        input: { kind: "asset" }, destination: nil, delivery: nil })
+                                        input: { kind: "asset" }, destination: nil, delivery: nil,
+                                        creditCost: 1, cached: false, deliveryOnly: false })
     end
 
     it "sends inputAssetId for an asset id String" do
@@ -182,18 +184,64 @@ RSpec.describe Snapnedit::Client do
       end
     end
 
-    it "reports a cache hit — 200 rather than 202, already succeeded" do
+    it "reports a cache hit — 200 rather than 202, already succeeded, billed nothing" do
       http_hit = FakeHTTP.new
       http_hit.stub(:post, "/jobs", status: 200, json: {
                       jobId: job_id, status: succeeded_job.slice("state", "outputAssetId", "download"),
-                      input: { kind: "asset" }, destination: nil, delivery: nil
+                      input: { kind: "asset" }, destination: nil, delivery: nil,
+                      creditCost: 0, cached: true, deliveryOnly: false
                     })
       hit = described_class.new(api_key: "k", base_url: "https://api.example", http: http_hit)
                            .create_job("remove-background", asset_id)
 
       expect(hit.cache_hit?).to be(true)
+      expect(hit.cached?).to be(true)
+      expect(hit.credit_cost).to eq(0)
+      expect(hit.delivery_only?).to be(false)
       expect(hit.succeeded?).to be(true)
       expect(hit.output_asset_id).to eq("cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+    end
+
+    it "reports what a fresh job cost, and that nothing was cached" do
+      job = client.create_job("remove-background", asset_id)
+
+      expect(job.credit_cost).to eq(1)
+      expect(job.cached?).to be(false)
+      expect(job.cache_hit?).to be(false)
+      expect(job.delivery_only?).to be(false)
+    end
+
+    it "reads a delivery-only clone: cached, free, and queued for the bucket write" do
+      clone = FakeHTTP.new
+      clone.stub(:post, "/jobs", status: 202, json: {
+                   jobId: job_id, status: { state: "queued" }, input: { kind: "asset" },
+                   destination: { type: "saved", id: "dest-1" },
+                   delivery: { status: "pending", attempts: 0 },
+                   creditCost: 0, cached: true, deliveryOnly: true
+                 })
+
+      job = described_class.new(api_key: "k", base_url: "https://api.example", http: clone)
+                           .create_job("remove-background", asset_id, destination: "dest-1")
+
+      expect(job.delivery_only?).to be(true)
+      expect(job.cached?).to be(true)
+      expect(job.credit_cost).to eq(0)
+      expect(job.delivery.pending?).to be(true)
+    end
+
+    it "treats a body without the usage fields as unbilled and uncached" do
+      bare = FakeHTTP.new
+      bare.stub(:post, "/jobs", status: 202, json: {
+                  jobId: job_id, status: { state: "queued" }, input: { kind: "asset" },
+                  destination: nil, delivery: nil
+                })
+
+      job = described_class.new(api_key: "k", base_url: "https://api.example", http: bare)
+                           .create_job("remove-background", asset_id)
+
+      expect(job.credit_cost).to eq(0)
+      expect(job.cached?).to be(false)
+      expect(job.delivery_only?).to be(false)
     end
   end
 
@@ -293,6 +341,9 @@ RSpec.describe Snapnedit::Client do
       expect(result.mime).to eq("image/png")
       expect(result.job_id).to eq(job_id)
       expect(result.input_kind).to eq("asset")
+      # The usage attribution the final GET reported, carried through.
+      expect(result.credit_cost).to eq(2)
+      expect(result.cached?).to be(false)
     end
 
     it "skips the upload for a { url: } input" do

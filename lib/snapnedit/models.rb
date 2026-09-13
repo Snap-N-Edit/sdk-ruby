@@ -177,9 +177,14 @@ module Snapnedit
     #     this job.
     attr_reader :status, :http_status
 
-    # @return [Boolean] whether `POST /jobs` answered `200` — the result was
-    #   already cached, so nothing was billed and nothing was queued.
-    def cache_hit? = @http_status == 200
+    # Whether the result came out of the cache rather than a model run.
+    #
+    # Reads the api's own {#cached?} flag first and falls back to the `200`
+    # (rather than `202`) a cache hit is answered with, so this still works on
+    # a {Job} built from a `GET /jobs/{id}` body, which carries no status code.
+    #
+    # @return [Boolean]
+    def cache_hit? = cached? || @http_status == 200
 
     # @return [String] `"queued"`, `"processing"`, `"succeeded"`, `"failed"`
     #   or `"canceled"`.
@@ -231,6 +236,30 @@ module Snapnedit
       raw = @status["download"]
       raw.is_a?(Hash) ? SignedUrl.new(raw) : nil
     end
+
+    # Credits actually debited for THIS job.
+    #
+    # 0 for a free operation, a cache hit, a delivery-only clone and any
+    # unmetered website/anonymous job. Debited at creation time and refunded in
+    # full if the job ends `failed`.
+    #
+    # @return [Integer]
+    def credit_cost = @raw["creditCost"] || 0
+
+    # Whether this row was satisfied from the result cache: no model ran and
+    # nothing was billed. A cache hit is still a job — one row per REQUEST — so
+    # this is a NEW job id pointing at the SAME {#output_asset_id} as the job
+    # whose result it reuses.
+    #
+    # @return [Boolean]
+    def cached? = @raw["cached"] == true
+
+    # Whether this row exists only to deliver an already-cached result to a
+    # destination: `cached?` with a bucket to write to, so the worker has
+    # something to do even though no model will run.
+    #
+    # @return [Boolean]
+    def delivery_only? = @raw["deliveryOnly"] == true
 
     # @return [String, nil] the machine-readable failure code, on a failed job.
     def error_code = @status["errorCode"]
@@ -293,6 +322,12 @@ module Snapnedit
 
     # @return [Delivery, nil]
     def delivery = @job.delivery
+
+    # @return [Integer] credits debited for the job — see {Job#credit_cost}.
+    def credit_cost = @job.credit_cost
+
+    # @return [Boolean] whether the result came from the cache, unbilled.
+    def cached? = @job.cached?
 
     # Writes {#output} to +path+.
     # @param path [String]

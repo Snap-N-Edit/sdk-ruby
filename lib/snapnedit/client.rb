@@ -275,6 +275,45 @@ module Snapnedit
       finish_run(final, destination: destination, download: download)
     end
 
+    # `GET /usage` — what this account has run, what it cost, and where it came
+    # from, bucketed along ONE dimension at a time.
+    #
+    # Everything is optional: `client.usage` is the last 30 days grouped by
+    # day. `usage(group_by: "key")` answers "which key is spending the
+    # credits"; `usage(source: "embed", group_by: "origin")` answers "which
+    # embedding site".
+    #
+    # Every `POST /jobs` writes one row — a cache hit included — so
+    # {UsageFacts#jobs} counts REQUESTS and {UsageFacts#cache_hits} says how
+    # many of them ran no model.
+    #
+    # An EMBED token is scoped to its own key: `key_id:` is forced to it and
+    # {UsageReport#keys} comes back empty. A session or `sk_` caller sees the
+    # whole account.
+    #
+    # @param from [Time, Date, String, nil] inclusive start. A bare
+    #   `"YYYY-MM-DD"` is midnight UTC. Defaults to 30 days before +to+.
+    # @param to [Time, Date, String, nil] inclusive end. A bare `"YYYY-MM-DD"`
+    #   covers that whole UTC day. Defaults to now.
+    # @param group_by [String, Symbol, nil] one of {Usage::GROUP_BY}; `"day"`
+    #   when omitted.
+    # @param key_id [String, nil] only jobs authenticated with this api key.
+    # @param origin [String, nil] only embed jobs from this host surface
+    #   (`"https://app.example.com"` or `"native:com.acme.photos"`).
+    # @param operation [String, nil] only jobs for this operation.
+    # @param source [String, Symbol, nil] one of {Usage::SOURCES}.
+    # @return [UsageReport]
+    # @raise [Snapnedit::Error] `unauthorized` without an account credential;
+    #   `invalid_input` for an unparseable date, `from` after `to`, or a range
+    #   over 366 days.
+    def usage(from: nil, to: nil, group_by: nil, key_id: nil, origin: nil, operation: nil, source: nil)
+      query = Util.query_string(
+        "from" => Util.iso8601(from), "to" => Util.iso8601(to), "groupBy" => group_by,
+        "keyId" => key_id, "origin" => origin, "operation" => operation, "source" => source
+      )
+      UsageReport.new(@transport.json(:get, "/usage#{query}", idempotent: true))
+    end
+
     private
 
     def finish_run(job, destination:, download:)
