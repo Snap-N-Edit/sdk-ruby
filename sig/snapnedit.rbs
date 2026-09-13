@@ -1,0 +1,329 @@
+# Type signatures for the public API of the `snapnedit` gem.
+#
+# Sorbet/RBS is not required to use the gem; these exist so a Steep or
+# TypeProf user gets checked calls. Validate with `rbs validate -I sig`.
+module Snapnedit
+  VERSION: String
+
+  type json = Hash[String, untyped]
+  type bytes_source = String | IO | StringIO
+  type job_input = String | Upload | Hash[Symbol | String, String]
+  type destination_arg = Symbol | nil | Hash[Symbol | String, untyped] | Destination | String
+
+  module ErrorCodes
+    INVALID_INPUT: String
+    UNSUPPORTED_MIME: String
+    TOO_LARGE: String
+    NOT_FOUND: String
+    INPUT_FETCH_FAILED: String
+    PROVIDER_FAILED: String
+    PROVIDER_EXHAUSTED: String
+    RATE_LIMITED: String
+    BOT_CHECK_FAILED: String
+    UNAUTHORIZED: String
+    FORBIDDEN: String
+    PAYMENT_REQUIRED: String
+    INTERNAL: String
+    ALL: Array[String]
+
+    def self.known?: (untyped code) -> bool
+    def self.coerce: (untyped value) -> String
+  end
+
+  class Error < StandardError
+    attr_reader code: String?
+    attr_reader status: Integer?
+    def initialize: (String message, ?code: String?, ?status: Integer?) -> void
+  end
+
+  class TimeoutError < Error
+    def initialize: (String message) -> void
+  end
+
+  class SignatureVerificationError < Error
+    def initialize: (?String message) -> void
+  end
+
+  module Operations
+    REMOVE_BACKGROUND: String
+    UPSCALE: String
+    UNBLUR: String
+    COLORIZE: String
+    STYLE_TRANSFER: String
+    RETOUCH: String
+    BEAUTIFY: String
+    MAGIC_ERASER: String
+    GENERATIVE_FILL: String
+    REMOVE_WATERMARK: String
+    AI_DENOISE: String
+    REPLACE_SKY: String
+    RELIGHT: String
+    REPLACE_BACKGROUND: String
+    STRIP_METADATA: String
+    AUTO_REMOVE_WATERMARK: String
+    RESIZE_IMAGE: String
+    ALL: Array[String]
+    REQUIRES_MASK: Array[String]
+    CREDIT_COSTS: Hash[String, Integer]
+
+    def self.valid?: (untyped id) -> bool
+    def self.requires_mask?: (String id) -> bool
+    def self.credit_cost: (String id) -> Integer?
+  end
+
+  module Mime
+    SUPPORTED: Array[String]
+    DEFAULT: String
+
+    def self.sniff: (String? bytes) -> String?
+    def self.from_path: (String? path) -> String?
+    def self.detect: (String? bytes, ?String? path) -> String
+  end
+
+  module HTTP
+    class Response
+      attr_reader status: Integer
+      attr_reader headers: Hash[String, String]
+      attr_reader body: String
+      def initialize: (status: Integer, headers: Hash[String, String], body: String) -> void
+      def success?: () -> bool
+      def json: () -> untyped
+      def content_type: () -> String?
+    end
+
+    interface _Adapter
+      def call: (method: Symbol, url: String, ?headers: Hash[String, String], ?body: String?) -> Response
+    end
+
+    class Adapter
+      include _Adapter
+      def initialize: (?open_timeout: Numeric, ?read_timeout: Numeric) -> void
+    end
+  end
+
+  class Model
+    def initialize: (json raw) -> void
+    def to_h: () -> json
+    def []: (String key) -> untyped
+  end
+
+  class SignedUrl < Model
+    def url: () -> String
+    def expires_at: () -> String
+  end
+
+  class Operation < Model
+    def id: () -> String
+    def label: () -> String
+    def accept: () -> Array[String]
+    def max_input_dimension: () -> Integer
+    def params_json_schema: () -> json
+    def requires_mask?: () -> bool
+    def description: () -> String
+    def seo_title: () -> String
+    def credit_cost: () -> Integer?
+  end
+
+  class Upload < Model
+    def asset_id: () -> String
+    def content_hash: () -> String?
+    def bytes: () -> Integer?
+  end
+
+  class Delivery < Model
+    def status: () -> String
+    def pending?: () -> bool
+    def delivered?: () -> bool
+    def failed?: () -> bool
+    def attempts: () -> Integer
+    def delivered_at: () -> String?
+    def status_code: () -> Integer?
+    def error: () -> String?
+    def key: () -> String?
+    def bucket: () -> String?
+    def local_copy_deleted?: () -> bool
+  end
+
+  class DestinationSummary < Model
+    def type: () -> String
+    def presigned_put?: () -> bool
+    def saved?: () -> bool
+    def id: () -> String?
+    def name: () -> String?
+  end
+
+  class Job < Model
+    TERMINAL_STATES: Array[String]
+
+    attr_reader status: json
+    attr_reader http_status: Integer?
+
+    def initialize: (json raw, ?job_id: String?, ?http_status: Integer?) -> void
+    def id: () -> String
+    def job_id: () -> String
+    def cache_hit?: () -> bool
+    def state: () -> String
+    def queued?: () -> bool
+    def processing?: () -> bool
+    def succeeded?: () -> bool
+    def failed?: () -> bool
+    def canceled?: () -> bool
+    def terminal?: () -> bool
+    def settled?: () -> bool
+    def output_asset_id: () -> String?
+    def download: () -> SignedUrl?
+    def error_code: () -> String?
+    def message: () -> String?
+    def input_kind: () -> String
+    def destination: () -> DestinationSummary?
+    def delivery: () -> Delivery?
+  end
+
+  class RunResult
+    attr_reader job_id: String
+    attr_reader job: Job
+    attr_reader output: String?
+    attr_reader mime: String?
+
+    def initialize: (job: Job, ?output: String?, ?mime: String?, ?downloaded: bool) -> void
+    def downloaded?: () -> bool
+    def download: () -> SignedUrl?
+    def input_kind: () -> String
+    def destination: () -> DestinationSummary?
+    def delivery: () -> Delivery?
+    def write: (String path) -> Integer
+  end
+
+  class Destination < Model
+    def id: () -> String
+    def name: () -> String
+    def provider: () -> String
+    def bucket: () -> String
+    def region: () -> String?
+    def endpoint: () -> String?
+    def force_path_style?: () -> bool
+    def key_prefix: () -> String
+    def access_key_id_last4: () -> String
+    def default?: () -> bool
+    def delete_after_delivery?: () -> bool
+    def last_test: () -> json?
+    def created_at: () -> String
+    def updated_at: () -> String
+  end
+
+  class DestinationTest < Model
+    def ok?: () -> bool
+    def latency_ms: () -> Integer
+    def error: () -> String?
+  end
+
+  class PresignedUpload < Model
+    def url: () -> String
+    def method: () -> String
+    def headers: () -> Hash[String, String]
+    def key: () -> String
+    def bucket: () -> String
+    def expires_at: () -> String
+  end
+
+  class EmbedToken < Model
+    def token: () -> String
+    def expires_at: () -> String
+  end
+
+  class Destinations
+    def initialize: (Transport transport) -> void
+    def list: () -> Array[Destination]
+    def create: (
+      name: String, provider: String, bucket: String,
+      access_key_id: String, secret_access_key: String,
+      ?region: String?, ?endpoint: String?, ?account_id: String?,
+      ?force_path_style: bool?, ?key_prefix: String?,
+      ?is_default: bool?, ?delete_after_delivery: bool?
+    ) -> Destination
+    def update: (String id, **untyped patch) -> Destination
+    def delete: (String id) -> nil
+    def test: (String id) -> DestinationTest
+    def presign_upload: (String id, ext: String, content_type: String) -> PresignedUpload
+  end
+
+  class Embed
+    def initialize: (Transport transport) -> void
+    def create_session: (publishable_key: String, host_origin: String) -> EmbedToken
+    def create_token: (
+      ?ttl_seconds: Integer?, ?end_user_id: String?, ?max_credits: Integer?,
+      ?allowed_operations: Array[String]?, ?origin: String?
+    ) -> EmbedToken
+  end
+
+  class Designs
+    FORMATS: Array[String]
+
+    def initialize: (Transport transport) -> void
+    def create: (Hash[untyped, untyped] spec) -> json
+    def render: (
+      ?spec: Hash[untyped, untyped]?, ?document: Hash[untyped, untyped]?,
+      ?pages: Array[Hash[untyped, untyped]]?, ?documents: Array[Hash[untyped, untyped]]?,
+      ?format: String?
+    ) -> String
+  end
+
+  class Transport
+    RETRYABLE_STATUSES: Array[Integer]
+    MAX_BACKOFF: Float
+
+    attr_reader base_url: String
+
+    def initialize: (
+      base_url: String, api_key: String?, adapter: HTTP::_Adapter,
+      ?max_retries: Integer, ?retry_base_delay: Numeric,
+      ?sleeper: ^(Numeric) -> void, ?user_agent: String
+    ) -> void
+    def json: (Symbol method, String path, ?body: untyped, ?idempotent: bool, ?auth: bool, ?expect_empty: bool) -> untyped
+    def raw: (Symbol method, String url, ?headers: Hash[String, String], ?body: String?, ?idempotent: bool, ?auth: bool) -> HTTP::Response
+  end
+
+  class Client
+    DEFAULT_BASE_URL: String
+    DEFAULT_POLL_INTERVAL: Float
+    DEFAULT_TIMEOUT: Float
+    DEFAULT_DESTINATION: Symbol
+
+    attr_reader base_url: String
+    attr_reader destinations: Destinations
+    attr_reader embed: Embed
+    attr_reader designs: Designs
+
+    def initialize: (
+      ?api_key: String?, ?base_url: String, ?http: HTTP::_Adapter?,
+      ?max_retries: Integer, ?open_timeout: Numeric, ?read_timeout: Numeric,
+      ?sleeper: (^(Numeric) -> void)?
+    ) -> void
+
+    def list_operations: () -> Array[Operation]
+    def upload: (bytes_source input, ?mime: String?) -> Upload
+    def create_job: (String operation, job_input input, ?params: Hash[untyped, untyped], ?destination: destination_arg) -> Job
+    def get_job: (String job_id) -> Job
+    def wait_for_job: (String job_id, ?poll_interval: Numeric, ?timeout: Numeric) -> Job
+    def download_result: (Job | SignedUrl | String job_or_signed_url) -> String
+    def run: (
+      String operation, bytes_source | Hash[Symbol | String, String] input,
+      ?params: Hash[untyped, untyped], ?mask: bytes_source?, ?mime: String?,
+      ?destination: destination_arg, ?download: bool?,
+      ?poll_interval: Numeric, ?timeout: Numeric
+    ) -> RunResult
+  end
+
+  module Webhooks
+    SIGNATURE_HEADER: String
+    EVENT_HEADER: String
+    DELIVERY_HEADER: String
+    EVENT_TYPES: Array[String]
+    DEFAULT_TOLERANCE: Integer
+
+    def self.verify: (String payload, String? signature, String secret, ?tolerance: Integer?, ?now: Integer) -> bool
+    def self.construct_event: (String payload, String? signature, String secret, ?tolerance: Integer?, ?now: Integer) -> json
+    def self.parse_header: (String? header) -> [Integer, Array[String]]?
+    def self.secure_compare: (String expected, String actual) -> bool
+  end
+end

@@ -1,0 +1,82 @@
+plugins:
+  - rubocop-rspec
+
+AllCops:
+  TargetRubyVersion: 3.2
+  NewCops: enable
+  SuggestExtensions: false
+  Exclude:
+    - "vendor/**/*"
+    - "pkg/**/*"
+    - "tmp/**/*"
+
+# The gem is one HTTP client; a couple of methods legitimately take the whole
+# api surface as keyword arguments.
+Metrics/ParameterLists:
+  CountKeywordArgs: false
+
+Metrics/MethodLength:
+  Max: 30
+
+Metrics/AbcSize:
+  Max: 25
+
+Metrics/ClassLength:
+  Max: 300
+
+# A handful of methods branch over the api's own shapes (five job states, four
+# input forms, five image magic numbers). Splitting those up would hide the
+# table, not clarify it.
+Metrics/CyclomaticComplexity:
+  Max: 9
+
+Metrics/PerceivedComplexity:
+  Max: 10
+
+Metrics/BlockLength:
+  Exclude:
+    - "spec/**/*"
+    - "*.gemspec"
+
+Style/StringLiterals:
+  EnforcedStyle: double_quotes
+
+Style/StringLiteralsInInterpolation:
+  EnforcedStyle: double_quotes
+
+Layout/LineLength:
+  Max: 120
+
+# Documentation is enforced by hand (YARD on every public method) rather than
+# by this cop, which only checks for a leading comment on the class.
+Style/Documentation:
+  Enabled: true
+
+RSpec/ExampleLength:
+  Max: 45
+
+RSpec/MultipleExpectations:
+  Max: 25
+
+RSpec/NestedGroups:
+  Max: 4
+
+# The conformance suite is one describe per scenario id, by design.
+RSpec/DescribeClass:
+  Exclude:
+    - "spec/conformance/**/*"
+
+RSpec/MultipleMemoizedHelpers:
+  Max: 12
+
+# `expect { }.to raise_error(X) { |e| ... }` MUST use braces — do/end would
+# bind the block to `to` instead of to the matcher.
+Style/BlockDelimiters:
+  AllowedMethods:
+    - raise_error
+
+# The conformance suite spawns one server process for the whole group; that is
+# the point of before(:all) here, and each scenario uses its own unique bytes.
+RSpec/BeforeAfterAll:
+  Exclude:
+    - "spec/conformance/**/*"
